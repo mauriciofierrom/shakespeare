@@ -398,7 +398,8 @@ foo { foo:X#{bar}Y; }
     }
 }
 |]
-    it "lucius mixins" $ do
+    context "lucius mixins" $ do
+      it "includes mixins correctly" $ do
         let bins = [luciusMixin|
                    bin:bin2;
                    /* FIXME not currently implementing sublocks in mixins
@@ -413,6 +414,14 @@ foo { foo:X#{bar}Y; }
                 bar: baz;
                 ^{bins}
             }
+        |]
+      it "respects rule order" $ do
+        let bins = [luciusMixin| color: red; |]
+        celper "foo{color:red;color:blue}" [lucius|
+            foo {
+                ^{bins}
+                color: blue;
+                }
         |]
     it "cassius mixins" $ do
         let bins = [cassiusMixin|
@@ -513,6 +522,7 @@ foo { foo:X#{bar}Y; }
 
 data Url = Home | Sub SubUrl
 data SubUrl = SubUrl
+
 render :: Url -> [(Text, Text)] -> Text
 render Home qs = pack "url" `mappend` showParams qs
 render (Sub SubUrl) qs = pack "suburl" `mappend` showParams qs

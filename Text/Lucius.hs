@@ -56,7 +56,7 @@ import Language.Haskell.TH.Quote (QuasiQuoter (..))
 import Language.Haskell.TH.Syntax
 import Data.Text (Text, unpack)
 import qualified Data.Text.Lazy as TL
-import Text.ParserCombinators.Parsec hiding (Line)
+import Text.ParserCombinators.Parsec
 import Text.Internal.Css
 import Data.Char (isSpace, toLower, toUpper)
 import Numeric (readHex)
@@ -109,14 +109,14 @@ detectAmp (Block (sel) b c d) =
             (ContentRaw ('&':s):rest):others -> (False, (ContentRaw s : rest) : others)
             _ -> (True, sel)
 
-partitionPBs :: [PairBlock] -> ([Attr Unresolved], [Block Unresolved], [Deref])
+partitionPBs :: [PairBlock] -> ([(Line, Attr Unresolved)], [Block Unresolved], [(Line, Deref)])
 partitionPBs =
     go id id id
   where
     go a b c [] = (a [], b [], c [])
-    go a b c (PBAttr x:xs) = go (a . (x:)) b c xs
+    go a b c (PBAttr l x:xs) = go (a . ((l, x):)) b c xs
     go a b c (PBBlock x:xs) = go a (b . (x:)) c xs
-    go a b c (PBMixin x:xs) = go a b (c . (x:)) xs
+    go a b c (PBMixin l x:xs) = go a b (c . ((l, x):)) xs
 
 parseSelector :: Parser (Selector Unresolved)
 parseSelector =
@@ -139,27 +139,28 @@ trim =
     trimS True = dropWhile isSpace
     trimS False = reverse . dropWhile isSpace . reverse
 
-data PairBlock = PBAttr (Attr Unresolved)
+data PairBlock = PBAttr Line (Attr Unresolved)
                | PBBlock (Block Unresolved)
-               | PBMixin Deref
+               | PBMixin Line Deref
 parsePairsBlocks :: ([PairBlock] -> [PairBlock]) -> Parser [PairBlock]
 parsePairsBlocks front = (char '}' >> return (front [])) <|> (do
     isBlock <- lookAhead checkIfBlock
-    x <- grabMixin <|> (if isBlock then grabBlock else grabPair)
+    pos <- getPosition
+    x <- grabMixin pos <|> (if isBlock then grabBlock else grabPair pos)
     parsePairsBlocks $ front . (:) x)
   where
     grabBlock = do
         b <- parseBlock
         whiteSpace
         return $ PBBlock b
-    grabPair = PBAttr <$> parsePair
-    grabMixin = try $ do
+    grabPair pos = PBAttr (sourceLine pos) <$> parsePair
+    grabMixin pos = try $ do
         whiteSpace
         Right x <- parseCaret
         whiteSpace
         (char ';' >> return ()) <|> return ()
         whiteSpace
-        return $ PBMixin x
+        return $ PBMixin (sourceLine pos) x
     checkIfBlock = do
         skipMany $ noneOf "#@{};"
         (parseHash >> checkIfBlock)
@@ -192,6 +193,9 @@ parseContent restricted =
       where
         go (d, False) = ContentUrl d
         go (d, True) = ContentUrlParam d
+    -- Escape sequences. Can be:
+    -- - Hex digits
+    -- - Unicode code point (4 - 6 ASCII upper hex digit)
     parseBack = try $ do
         _ <- char '\\'
         hex <- atMost 6 $ satisfy isHex
@@ -258,6 +262,7 @@ parseTopLevels =
         val <- parseContents ";"
         _ <- char ';'
         return $ TopAtDecl "import" val
+    -- Lucius-specific variables: @textcolor: #ccc
     var = try $ do
         _ <- char '@'
         isPage <- (try $ string "page " >> return True) <|>
